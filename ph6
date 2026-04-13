@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doppler Effect & Sonic Boom Simulation</title>
+    <style>
+        :root {
+            --bg: #0a0a12;
+            --panel: #161625;
+            --accent: #00f2ff;
+            --text: #e0e0ff;
+            --source: #ff007b;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* Control Panel Styling */
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 280px;
+            background: var(--panel);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        h2 { margin: 0 0 15px 0; font-size: 1.2rem; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+
+        .control-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-size: 0.9rem; opacity: 0.8; }
+        
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--accent);
+        }
+
+        .stats {
+            margin-top: 15px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        .mach-high { color: #ff3e3e; font-weight: bold; }
+        .mach-low { color: var(--accent); }
+
+        .btn-row { display: flex; gap: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover { opacity: 0.8; transform: translateY(-1px); }
+        button.reset { background: #444; color: white; }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <h2>Aero-Acoustics</h2>
+        
+        <div class="control-group">
+            <label>Source Speed ($v_s$): <span id="vSrcVal">50</span></label>
+            <input type="range" id="vSource" min="0" max="150" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>Wave Speed ($v_w$): <span id="vWaveVal">80</span></label>
+            <input type="range" id="vWave" min="30" max="150" value="80">
+        </div>
+
+        <div class="control-group">
+            <label>Emission Rate: <span id="freqVal">5</span> Hz</label>
+            <input type="range" id="freq" min="1" max="20" value="5">
+        </div>
+
+        <div class="btn-row">
+            <button id="pauseBtn">Pause</button>
+            <button id="resetBtn" class="reset">Reset</button>
+        </div>
+
+        <div class="stats">
+            Mach Number: <span id="machNum">0.63</span><br>
+            Status: <span id="status">Subsonic</span>
+        </div>
+    </div>
+
+    <canvas id="simCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Configuration
+        let waves = [];
+        let sourceX = 50;
+        let lastWaveTime = 0;
+        let isPaused = false;
+
+        const inputs = {
+            vSource: document.getElementById('vSource'),
+            vWave: document.getElementById('vWave'),
+            freq: document.getElementById('freq'),
+            pauseBtn: document.getElementById('pauseBtn'),
+            resetBtn: document.getElementById('resetBtn')
+        };
+
+        const displays = {
+            vSrcVal: document.getElementById('vSrcVal'),
+            vWaveVal: document.getElementById('vWaveVal'),
+            freqVal: document.getElementById('freqVal'),
+            machNum: document.getElementById('machNum'),
+            status: document.getElementById('status')
+        };
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Wave {
+            constructor(x, y, v) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                this.v = v;
+                this.alpha = 1.0;
+            }
+
+            update(dt) {
+                this.radius += this.v * dt;
+                // Fade out as they get huge
+                this.alpha = Math.max(0, 1 - (this.radius / (canvas.width * 0.8)));
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(0, 242, 255, ${this.alpha * 0.5})`;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+        }
+
+        function reset() {
+            waves = [];
+            sourceX = 50;
+        }
+
+        inputs.pauseBtn.onclick = () => {
+            isPaused = !isPaused;
+            inputs.pauseBtn.innerText = isPaused ? "Resume" : "Pause";
+        };
+
+        inputs.resetBtn.onclick = reset;
+
+        let lastTimestamp = 0;
+
+        function animate(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const dt = (timestamp - lastTimestamp) / 1000;
+            lastTimestamp = timestamp;
+
+            if (!isPaused) {
+                ctx.fillStyle = '#0a0a12'; // Dark background
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Update Values
+                const vs = parseFloat(inputs.vSource.value);
+                const vw = parseFloat(inputs.vWave.value);
+                const fr = parseFloat(inputs.freq.value);
+                const mach = (vs / vw).toFixed(2);
+
+                displays.vSrcVal.innerText = vs;
+                displays.vWaveVal.innerText = vw;
+                displays.freqVal.innerText = fr;
+                displays.machNum.innerText = mach;
+
+                if (mach > 1) {
+                    displays.status.innerText = "SUPERSOIC (Sonic Boom)";
+                    displays.status.className = "mach-high";
+                } else if (mach == 1) {
+                    displays.status.innerText = "Sonic Barrier";
+                    displays.status.className = "mach-high";
+                } else {
+                    displays.status.innerText = "Subsonic";
+                    displays.status.className = "mach-low";
+                }
+
+                // Move Source
+                sourceX += vs * dt;
+                if (sourceX > canvas.width + 100) sourceX = -50;
+
+                // Emit Waves
+                if (timestamp - lastWaveTime > (1000 / fr)) {
+                    waves.push(new Wave(sourceX, canvas.height / 2, vw));
+                    lastWaveTime = timestamp;
+                }
+
+                // Update and Draw Waves
+                for (let i = waves.length - 1; i >= 0; i--) {
+                    waves[i].update(dt);
+                    waves[i].draw();
+                    if (waves[i].alpha <= 0) waves.splice(i, 1);
+                }
+
+                // Draw Source
+                ctx.beginPath();
+                ctx.arc(sourceX, canvas.height / 2, 6, 0, Math.PI * 2);
+                ctx.fillStyle = '#ff007b';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ff007b';
+                ctx.fill();
+                ctx.shadowBlur = 0; // Reset shadow for performance
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
